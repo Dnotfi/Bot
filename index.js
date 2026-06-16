@@ -1,184 +1,38 @@
-require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, REST, Routes } = require('discord.js');
-const https = require('https');
-const { URL } = require('url');
-const fs = require('fs');
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 
-// ========== LINKVERTISE BYPASS (GRAPHQL) ==========
-const LINKVERTISE_TOKEN = "HahaðŸ—¿";  // Replace if expired
-const GQL_URL = "https://publisher.linkvertise.com/graphql";
-
-async function bypassLinkvertise(targetUrl) {
-  return new Promise((resolve, reject) => {
-    let urlPath;
-    try {
-      const parsed = new URL(targetUrl);
-      urlPath = parsed.pathname.replace('/access/', '/').replace(/\/[0-9]$/, '');
-    } catch (err) {
-      reject(new Error('Invalid URL'));
-      return;
-    }
-    const match = urlPath.match(/\/(\d+)\/([\w-]+)/);
-    if (!match) {
-      reject(new Error('Invalid Linkvertise URL format'));
-      return;
-    }
-    const userId = parseInt(match[1]);
-    const slug = match[2];
-    console.log(`[Linkvertise] ID: ${userId} | Slug: ${slug}`);
-
-    const payload = JSON.stringify({
-      operationName: "getContent",
-      variables: {
-        identifier: { userIdAndUrl: { user_id: userId, url: slug } }
-      },
-      query: `
-        query getContent($identifier: PublicLinkIdentificationInput!) {
-          getContent(input: $identifier) {
-            __typename
-            ... on DetailPageTargetData { url paste }
-          }
-        }
-      `
-    });
-
-    const options = {
-      hostname: 'publisher.linkvertise.com',
-      path: '/graphql',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36',
-        'Authorization': `Bearer ${LINKVERTISE_TOKEN}`,
-        'Origin': 'https://linkvertise.com',
-        'Referer': 'https://linkvertise.com/'
-      }
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          const content = json.data?.getContent;
-          if (content?.__typename === 'DetailPageTargetData') {
-            const result = content.url || content.paste;
-            if (result) resolve(result);
-            else reject(new Error('No url/paste found'));
-          } else {
-            reject(new Error('Unexpected response type'));
-          }
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
-}
-
-// ========== DISCORD BOT ==========
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
+    ]
 });
 
-// Custom emojis (using your exact IDs)
-const EMOJIS = {
-  loading: "<a:loading:1477881141678702603>",
-  success: "<a:success:1401388568710217738>",
-  warn: "<a:Warn:1514600338542559414>",
-  time: "<a:time:1430542254258393208>"
-};
+const TOKEN = 'MTQ4MTY3ODUwNjU5NjQ5OTU3Nw.GRmNZh.4UpqjdthC0ZXImEVjHExgVgYElgBq5CMaY2mr4';
+const WELCOME_CHANNEL_ID = '1514622687899549776';
 
-// Persistent storage for enabled channels
-const DATA_FILE = './autobypass_channels.json';
-let enabledChannels = new Set();
-
-if (fs.existsSync(DATA_FILE)) {
-  const data = JSON.parse(fs.readFileSync(DATA_FILE));
-  enabledChannels = new Set(data);
-}
-function saveChannels() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify([...enabledChannels]));
-}
-
-// Register slash command
-client.once('ready', async () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-  console.log(`Made by rtao_rs3`);
-  const commands = [
-    new SlashCommandBuilder()
-      .setName('autobypass')
-      .setDescription('Toggle auto‑bypass for Linkvertise links in this channel')
-  ];
-  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-  try {
-    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    console.log('✅ Slash command /autobypass registered');
-  } catch (err) { console.error(err); }
+client.once('ready', () => {
+    console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// Slash command handler
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isCommand()) return;
-  if (interaction.commandName === 'autobypass') {
-    const channelId = interaction.channelId;
-    const userId = interaction.user.id;
-    const channel = interaction.channel;
+client.on('guildMemberAdd', async (member) => {
+    const welcomeChannel = member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
+    if (!welcomeChannel) return;
 
-    if (enabledChannels.has(channelId)) {
-      enabledChannels.delete(channelId);
-      saveChannels();
-      await interaction.reply({
-        content: `${EMOJIS.warn} Auto‑bypass **disabled** in ${channel}`,
-        ephemeral: false
-      });
-    } else {
-      enabledChannels.add(channelId);
-      saveChannels();
-      await interaction.reply({
-        content: `${EMOJIS.success} **Auto bypass enabled**\nChannel: <#${channelId}>\nBy: <@${userId}>\nMade by rtao_rs3`,
-        ephemeral: false
-      });
-    }
-  }
-});
-
-// Auto‑bypass message handler
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-  if (!enabledChannels.has(message.channelId)) return;
-
-  const linkRegex = /(https?:\/\/[^\s]*linkvertise\.com[^\s]*)/i;
-  const match = message.content.match(linkRegex);
-  if (!match) return;
-
-  const originalUrl = match[0];
-  const startTime = Date.now();
-
-  // Send initial "bypassing" message
-  const statusMsg = await message.reply(`${EMOJIS.loading} Bypassping...`);
-
-  try {
-    const result = await bypassLinkvertise(originalUrl);
-    const timeTaken = ((Date.now() - startTime) / 1000).toFixed(2);
     const embed = new EmbedBuilder()
-      .setColor(0x00AE86)
-      .setTitle(`${EMOJIS.success} Bypass Successful`)
-      .setDescription(`**Original:** ${originalUrl}\n**Result:** ${result}`)
-      .addFields({ name: `${EMOJIS.time} Time`, value: `${timeTaken} seconds`, inline: true })
-      .setFooter({ text: 'Made by rtao_rs3 • Auto‑bypass enabled' });
-    await statusMsg.edit({ content: null, embeds: [embed] });
-  } catch (err) {
-    await statusMsg.edit(`${EMOJIS.warn} Failed to bypass: ${err.message}`);
-  }
+        .setColor(0x00AE86)
+        .setTitle(`👋 Welcome to ${member.guild.name}!`)
+        .setDescription(`Welcome <@${member.id}>!\nWe're glad to have you here.`)
+        .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
+        .addFields(
+            { name: '📅 Member Since', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true },
+            { name: '👤 Username', value: member.user.tag, inline: true }
+        )
+        .setFooter({ text: `Member #${member.guild.memberCount}` })
+        .setTimestamp();
+
+    await welcomeChannel.send({ content: `<@${member.id}>`, embeds: [embed] });
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(TOKEN);
